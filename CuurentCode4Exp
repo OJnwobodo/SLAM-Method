@@ -1,0 +1,346 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
+using Random = UnityEngine.Random;
+using UnityEngine.EventSystems;
+using System.IO;
+using System;
+
+
+
+
+
+
+public class DynmicAdjustment : MonoBehaviour
+{
+    public GameObject SphereObject;
+    public GameObject CubeObject;
+    public GameObject MeshObject;
+    public GameObject arrowPrefab;
+    private Vector3 arrowPosition = new Vector3(0.0f, -1.0f, 4.0f);
+    private Vector3 arrowScale = new Vector3(3.0f, 20.0f, 20.0f);
+    private Vector3 cameraPositionAtArrowAppear;
+    private Quaternion cameraRotationAtArrowAppear;
+    private Quaternion cameraRotationTouch;
+    private GameObject instantiatedArrow;
+    private GameObject instantiatedObject;
+    public Vector3 distortionVector;
+
+    private bool objectTouched = false;
+    private float touchStartTime;
+    private Vector3 objectInitialPosition;
+    private Color initialObjectColor;
+    public float scalingFactor = 1f;
+    private float arrowAppearTimeMicros;
+    private Camera mainCamera;
+    private int chosenObjectType;
+    private int objectType;
+    private float fittsLawIndex;
+    private string ArrowEulerAngles;
+
+
+    private SampleData sampleData;
+    private List<SampleData> collectedObjectDataList = new List<SampleData>();
+
+
+
+
+    private void Start()
+    {
+        mainCamera = Camera.main;
+        arrowCreate();
+        DrawObjectType();
+        cameraRotationAtArrowAppear = Camera.main.transform.rotation;
+        TouchObject();
+        SaveResults();
+        arrowAppearTimeMicros = Time.realtimeSinceStartup * 1000000f; // Save the time when the arrow appeared
+    }
+
+    private void arrowCreate()
+    {
+        // Instantiate the arrow object
+        instantiatedArrow = Instantiate(arrowPrefab, arrowPosition, Quaternion.identity);
+        instantiatedArrow.transform.localScale = arrowScale;
+        // Store the initial camera position and rotation
+        cameraPositionAtArrowAppear = Camera.main.transform.position;
+        cameraRotationAtArrowAppear = Camera.main.transform.rotation;
+
+    }
+
+    private void DrawObjectType()
+    {
+        // Generate random properties for the object
+        float radius = Random.Range(0.0f, 10.0f); // Example range for radius
+        float inclination = Random.Range(0.0f, Mathf.PI);
+        float azimuth = Random.Range(0.0f, Mathf.PI);
+        distortionVector = new Vector3(Random.Range(0.8f, 1.2f), Random.Range(0.8f, 1.2f), Random.Range(0.8f, 1.2f));
+        scalingFactor = Random.Range(0.5f, 2.0f);
+        Color color = new Color(Random.value, Random.value, Random.value);
+
+        // Choose a random object type
+        objectType = Random.Range(0, 3); // 0: Sphere, 1: Cube, 2: Mesh
+        // Instantiate the chosen object type
+        switch (objectType)
+        {
+            case 0:
+                instantiatedObject = Instantiate(SphereObject);
+                break;
+            case 1:
+                instantiatedObject = Instantiate(CubeObject);
+                break;
+            case 2:
+                instantiatedObject = Instantiate(MeshObject);
+                break;
+        }
+        // Set object properties
+        if (instantiatedObject)
+        {
+            Vector3 objectPosition = new Vector3(radius * Mathf.Sin(inclination) * Mathf.Cos(azimuth),
+                                                 radius * Mathf.Sin(inclination) * Mathf.Sin(azimuth),
+                                                 radius * Mathf.Cos(inclination));
+            instantiatedObject.transform.position = objectPosition;
+            instantiatedObject.transform.localScale = distortionVector * scalingFactor;
+            instantiatedObject.GetComponent<Renderer>().material.color = color;
+
+            // Calculate direction from arrow to object
+            Vector3 direction = (objectPosition - arrowPosition).normalized;
+            Quaternion rotation = Quaternion.LookRotation(direction);
+            instantiatedArrow.transform.rotation = rotation;
+
+            // Add a SphereCollider to the instantiated object
+            SphereCollider collider = instantiatedObject.AddComponent<SphereCollider>();
+            collider.radius = 1.0f; // Adjust the radius as needed
+            chosenObjectType = Random.Range(0, 3); // 0: Sphere, 1: Cube, 2: Mesh
+
+            // Calculate Fitt's Law index
+            float objectSize = CalculateObjectSize();
+            float distanceToObject = Vector3.Distance(mainCamera.transform.position, instantiatedObject.transform.position);
+            float fittsLawIndex = Mathf.Log(distanceToObject / objectSize + 1, 2); // Using base-2 logarithm
+
+        }
+    }
+
+    private void TouchObject()
+    {
+        objectTouched = true;
+        touchStartTime = Time.time;
+        objectInitialPosition = instantiatedObject.transform.position;
+        initialObjectColor = instantiatedObject.GetComponent<Renderer>().material.color;
+        // Record the camera rotation when the object is touched
+        cameraRotationTouch = Camera.main.transform.rotation;
+    }
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (objectTouched)
+        {
+            if (eventData.pointerPress == instantiatedObject)
+            {
+                ChangeObjectColor();
+                chosenObjectType = objectType;
+                SaveResults();
+                StartNewObject();
+            }
+        }
+    }
+
+    private void ChangeObjectColor()
+    {
+        // Generate a new random color
+        Color newColor = new Color(Random.value, Random.value, Random.value);
+
+        // Change the color of the instantiated object
+        instantiatedObject.GetComponent<Renderer>().material.color = newColor;
+
+        // Update the initial object color
+        initialObjectColor = newColor;
+    }
+
+    private void StartNewObject()
+    {
+        if (instantiatedObject != null)
+        {
+            // Destroy the old instantiated object
+            Destroy(instantiatedObject);
+        }
+        // Start the coroutine for changing color, saving parameters, and instantiating new object
+        StartCoroutine(ChangeColorSaveAndInstantiate());
+    }
+    private IEnumerator ChangeColorSaveAndInstantiate()
+    {
+        // Change color of the instantiated object
+        ChangeObjectColor();
+        // Save parameters
+        SaveResults();
+        // Wait for a short duration (e.g., 2 seconds) before instantiating a new object
+        yield return new WaitForSeconds(2f);
+
+        // Destroy the old instantiated object
+        if (instantiatedObject != null)
+        {
+            Destroy(instantiatedObject);
+        }
+        // Instantiate a new object and perform necessary actions
+        DrawObjectType();
+        TouchObject();
+    }
+    private void SaveResults()
+    {
+        if (objectTouched && instantiatedObject != null)
+        {
+            // Calculate the final position of the object in camera coordinate system
+            Vector3 finalObjectPosition = mainCamera.transform.InverseTransformPoint(instantiatedObject.transform.position);
+            // Calculate action time in microseconds
+            float actionTimeMicroseconds = (Time.time - touchStartTime) * 1000000f; // Convert to microseconds                                                                                   
+            float timeBetweenAppearAndTouchMicroseconds = Mathf.Abs((touchStartTime - arrowAppearTimeMicros) * 1000000f); // Convert to microseconds and take the absolute value
+
+            float objectSize = CalculateObjectSize();
+            float distanceToObject = Vector3.Distance(mainCamera.transform.position, instantiatedObject.transform.position);
+            float fittsLawIndex = Mathf.Log(distanceToObject / objectSize + 1, 2); // Using base-2 logarithm
+
+            // Create the SampleData object
+            sampleData = new SampleData();
+            sampleData.objectType = GetObjectTypeString();
+            sampleData.PSjkIntrinsic = Camera.main.projectionMatrix;
+            sampleData.PTjkExtrinsic = CalculateExtrinsicMatrix();
+            sampleData.cameraPositionStart = Camera.main.transform.position;
+            sampleData.cameraRotationStart = Camera.main.transform.rotation;
+            sampleData.cameraPositionTouch = Camera.main.transform.position;
+            sampleData.cameraRotationTouch = Camera.main.transform.rotation;
+            sampleData.objectPosition = instantiatedObject.transform.position;
+            sampleData.distortionVector = distortionVector;
+            sampleData.scalingFactor = scalingFactor;
+            sampleData.objectColor = instantiatedObject.GetComponent<Renderer>().material.color;
+            sampleData.actionTime = (Time.realtimeSinceStartup * 1000000f) - arrowAppearTimeMicros;
+            sampleData.fittsLawIndex = Mathf.Log(distanceToObject / objectSize + 1, 2);
+            sampleData.timeBetweenAppearAndTouch = timeBetweenAppearAndTouchMicroseconds;
+            sampleData.ArrowEulerAngles = ArrowEulerAngles;
+
+
+            // Convert the sampleData to JSON format
+            string sampleDataJson = JsonUtility.ToJson(sampleData);
+
+            // Define the directory path where you want to save the JSON file
+            string directoryPath = "C:/ARTutorial/HoloInteraction/ExperimentResults";
+            Directory.CreateDirectory(directoryPath);
+
+            // Generate a timestamp for the filename
+            string timeStamp = DateTime.Now.ToString("yyyyMMddHHmmssfff");
+            string fileName = "sampledata_" + timeStamp + ".json";
+            string savePath = Path.Combine(directoryPath, fileName);
+
+            // Write the JSON data to the file
+            File.WriteAllText(savePath, sampleDataJson);
+
+            Debug.Log("Fitt's Law Result: " + fittsLawIndex);
+
+            // Clear the collectedObjectDataList after saving
+            collectedObjectDataList.Clear();
+        }
+    }
+
+
+
+    private float CalculateObjectSize()
+    {
+        // Calculate the object size based on the instantiated object's scale
+        return (instantiatedObject.transform.localScale.x + instantiatedObject.transform.localScale.y + instantiatedObject.transform.localScale.z) / 3.0f;
+    }
+    private string GetObjectTypeString()
+    {
+        if (chosenObjectType == 0) return "S";
+        if (chosenObjectType == 1) return "C";
+        if (chosenObjectType == 2) return "M";
+        return "-";
+    }
+
+    private Matrix4x4 CalculateExtrinsicMatrix()
+    {
+        // Calculate the extrinsic matrix based on the estimated camera pose
+        Vector3 cameraPosition = Camera.main.transform.position;
+        Quaternion cameraRotation = Camera.main.transform.rotation;
+        Matrix4x4 extrinsicMatrix = Matrix4x4.TRS(cameraPosition, cameraRotation, Vector3.one);
+
+        return extrinsicMatrix;
+    }
+    private Matrix4x4 CalculateIntrinsicMatrix()
+    {
+        float focalLength = Camera.main.fieldOfView;
+        float aspect = Camera.main.aspect;
+        float sensorWidth = Camera.main.sensorSize.x;
+        // Calculate the intrinsic matrix based on the estimated parameters
+        Matrix4x4 intrinsicMatrix = Matrix4x4.identity;
+        intrinsicMatrix[0, 0] = focalLength / aspect;
+        intrinsicMatrix[1, 1] = focalLength;
+        intrinsicMatrix[0, 2] = Camera.main.pixelWidth / 2.0f;
+        intrinsicMatrix[1, 2] = Camera.main.pixelHeight / 2.0f;
+
+        return intrinsicMatrix;
+    }
+    private void SaveAllObjectData()
+    {
+        string directoryPath = "C:/ARTutorial/HoloInteraction/ExperimentResults";
+        Directory.CreateDirectory(directoryPath);
+        for (int i = 0; i < collectedObjectDataList.Count; i++)
+        {
+            string timeStamp = DateTime.Now.ToString("yyyyMMddHHmmssfff"); // Generate a timestamp
+            string fileName = "sampledata_" + timeStamp + ".json"; // Use timestamp in the file name
+            string savePath = Path.Combine(directoryPath, fileName);
+            string sampleDataJson = JsonUtility.ToJson(collectedObjectDataList[i]);
+            File.WriteAllText(savePath, sampleDataJson);
+        }
+    }
+
+
+    private void SomeMethodToSaveData()
+    {
+        SaveAllObjectData();
+    }
+
+    private void Update()
+    {
+        if (Input.GetMouseButtonDown(0))
+        {
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            RaycastHit hit;
+
+            if (Physics.Raycast(ray, out hit))
+            {
+                GameObject hitObject = hit.collider.gameObject;
+
+                if (hitObject == instantiatedObject)
+                {
+                    // Change object color and start the coroutine
+                    ChangeObjectColor();
+                    StartCoroutine(ChangeColorSaveAndInstantiate());
+                }
+            }
+        }
+
+        if (instantiatedArrow != null && instantiatedObject != null)
+        {
+            // Get the camera's position and rotation
+            Vector3 cameraPosition = Camera.main.transform.position;
+            Quaternion cameraRotation = Camera.main.transform.rotation;
+
+            Debug.Log("Camera Position: " + cameraPosition);
+            Debug.Log("Camera Rotation: " + cameraRotation.eulerAngles);
+
+            // Update the arrow's position to follow the camera
+            instantiatedArrow.transform.position = cameraPosition + cameraRotation * arrowPosition;
+            // Calculate the direction from the arrow's position to the object's position
+            Vector3 directionToObject = instantiatedObject.transform.position - instantiatedArrow.transform.position;
+            // Set the rotation of the arrow to point in the direction of the object
+            Quaternion arrowRotation = Quaternion.LookRotation(directionToObject, Vector3.up);
+            instantiatedArrow.transform.rotation = arrowRotation;
+
+            Vector3 arrowRotationAngles = arrowRotation.eulerAngles;
+            float arrowYawAngle = arrowRotationAngles.y;     // Yaw angle
+            float arrowPitchAngle = arrowRotationAngles.x;   // Pitch angle
+            float arrowRollAngle = arrowRotationAngles.z;    // Roll angle
+            ArrowEulerAngles = $"{arrowYawAngle},{arrowPitchAngle},{arrowRollAngle}";
+
+            Debug.Log("Arrow Euler Angles: " + string.Join(", ", ArrowEulerAngles));
+        }
+    }
+}
